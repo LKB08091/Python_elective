@@ -1,27 +1,45 @@
 import RPi.GPIO as GPIO
 import sys
 import spidev
-from time import *
+import time
+import datetime
 import requests
 import json
 from mfrc522 import SimpleMFRC522
+import dht11
 import I2C_LCD_driver
+import threading
+import requests
+
 GPIO.setmode(GPIO.BCM)
 GPIO.setwarnings(False)
+GPIO.setup(24,GPIO.OUT) #LED, set GPIO 24 as output
+GPIO.setup(18,GPIO.OUT) #buzzer, set GPIO 18 as output
+buzzer_pwm = GPIO.PWM(18,100)
+#set 100Hz PWM output at GPIO 18 (buzzer)
+#use PWM.start(1) to activate
+GPIO.setup(23, GPIO.OUT) #dc motor
+motor_pwm=GPIO.PWM(23,50) #motor pwm freq is 50hz
+GPIO.setup(25,GPIO.OUT) #GPIO25 as Trig
+GPIO.setup(27,GPIO.IN) #GPIO27 as Echo
 
-GPIO.setup(x, GPIO.OUT) #control for dc motor
-my_pwm=GPIO.PWM(x,50) #pwm freq is 50hz
+#keypad
+matrix=[[1,2,3],[4,5,6],[7,8,9],["*",0,"#"]]
+row=[6,20,19,13]
+col=[12,5,16]
 
-#matrix,row and col are for keypad
-matrix=[[1,2,3],[4,5,6],[7,8,9],["A",0,"B"]]
-row=[13,21,20,26]
-col=[19,6,16]
+#set column pins as outputs, and write default value of 1 to each
 for i in range(3):
     GPIO.setup(COL[i],GPIO.OUT)
     GPIO.output(COL[i],1)
 
+#set row pins as inputs, with pull up
 for j in range(4):
-    GPIO.setup(row[j],GPIO.IN,pull_up_down=GPIO.PUD_UP)
+    GPIO.setup(ROW[j],GPIO.IN,pull_up_down=GPIO.PUD_UP)
+
+LCD = I2C_LCD_driver.lcd() #instantiate an lcd object, call it LCD
+LCD.backlight(1)
+
 
 class products():
     def __init__(self,name,id,price,quantity):
@@ -30,16 +48,55 @@ class products():
         self.price=price
         self.quantity=quantity
 
-def normal():
-    #led display 'Welcome' and 'Select the product'
-    #camera take photo
-    #temperature and humidity sensor take readings
+#init some products objects
+Product1=products("Panadol with Optizorb Caplets",1,7.9,5)
+Product2=products("Hansaplast Plasters",2,2.7,4)
+Product3=products("Whisper Wings Pads",3,6.2,3)
+        
+#then store in a dictionary to loop during product selection
+product_list={
+    Product1.id: Product1,
+    Product2.id: Product2,
+    Product3.id: Product3
+    }
 
-
-def select_product():
-    #led display the price of products selected
-    #if product that is not available is selected, display not availale
+#main function
+#ultrasound detect for customer
+distance=ultrasound()
+while True:
+    #lcd display welcome, keeps checking for customers
+    if distance > 10:
+        distance=ultrasound()
+        lcd("Welcome!",1)
+    else:
+    #customer is detected
+        lcd("Medicine Vending Machine",1)
+        lcd("Please select an item", 2)
+    #check what button customer presses
+        key_pressed=keypad()
+    #find the product coresponding to key_pressed
+        price=select_product(key_pressed)
+    #display price on lcd
+        lcd(str(price),1)
+    #check if customer pays
+    #deduct amount from cust account
+    #change item count
+    #LED is green
+    #LCD display successful
+    #motor turns
     
+        
+        
+
+def select_product(item_id):
+    #led display the price of products selected
+    item=product_list.get(item_id)
+    if item:
+        return item.price
+    #if product that is not available is selected, display not availale
+    else:
+        return "Not available"
+
 def payment():
     #make sure payment is made
     #read rfid card asnd deduct amount that is stored on a remote site
@@ -52,4 +109,63 @@ def dispense():
 
 def send_data():
     #send data to webpage or app
+
+def ultrasound():
+    #produce a 10us pulse at Trig
+    GPIO.output(25,1) 
+    time.sleep(0.00001)
+    GPIO.output(25,0)
+
+    #measure pulse width (i.e. time of flight) at Echo
+    StartTime=time.time()
+    StopTime=time.time()
+    while GPIO.input(27)==0:
+        StartTime=time.time() #capture start of high pulse       
+    while GPIO.input(27)==1:
+        StopTime=time.time() #capture end of high pulse
+    ElapsedTime=StopTime-StartTime
+
+    #compute distance in cm, from time of flight
+    Distance=(ElapsedTime*34300)/2
+       #distance=time*speed of ultrasound,
+       #/2 because to & fro
+    return Distance
+
+def dht11():
+    try:
+    while True: #keep reading, unless keyboard is pressed
+        result = instance.read()
+        if result.is_valid(): #print datetime & sensor values
+            print("Last valid input: " +     
+                str(datetime.datetime.now()))
+            print("Temperature: %-3.1f C" % result.temperature)
+            print("Humidity: %-3.1f %%" % result.humidity)
+        time.sleep(0.5) #short delay between reads
+
+    except KeyboardInterrupt:
+        print("Cleanup")
+        GPIO.cleanup() #Google what this means…
     
+
+def keypad():
+    #scan keypad
+    while (True):
+        for i in range(3): #loop thru’ all columns
+            GPIO.output(COL[i],0) #pull one column pin low
+            for j in range(4): #check which row pin becomes low
+                if GPIO.input(ROW[j])==0: #if a key is pressed
+                    print (MATRIX[j][i]) #print the key pressed
+                    key_pressed=MATRIX[j][i]
+                    while GPIO.input(ROW[j])==0: #debounce
+                        sleep(0.1)
+                    return key_pressed
+            GPIO.output(COL[i],1) #write back default value of 1
+
+def lcd(content,line):
+    LCD.backlight(1) #turn backlight on 
+    #LCD.lcd_display_string("LCD Display Test", 1) #write on line 1
+    #LCD.lcd_display_string("Address = 0x27", 2, 2) #write on line 2
+              #starting on 3rd column
+    LCD.lcd_display_string(content, line)
+    LCD.lcd_clear() #clear the display
+
